@@ -48,7 +48,8 @@ func setupAPPTest() (uint64, bool, *AppPixivAPI) {
 	} else {
 		testUID = setupAPPRealTest()
 	}
-	return testUID, mock, NewApp()
+	os.MkdirAll("tmp", 0755)
+	return testUID, mock, NewApp().WithTmpdir("tmp")
 }
 
 func getMockedResponse(file string) (string, error) {
@@ -142,6 +143,10 @@ func TestIllustDetail(t *testing.T) {
 	illust, err := app.IllustDetail(68943534)
 	r.Nil(err)
 	r.Equal(uint64(68943534), illust.ID)
+
+	tt, err := time.Parse(time.RFC3339, "2018-05-27T12:14:11+09:00")
+	r.Nil(err)
+	r.Equal(tt, illust.CreateDate)
 
 	if mock {
 		httpmock.DeactivateAndReset()

@@ -3,9 +3,7 @@ package pixiv
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"path/filepath"
-	"time"
 
 	"github.com/dghubble/sling"
 	"github.com/pkg/errors"
@@ -17,14 +15,19 @@ const (
 
 // AppPixivAPI -- App-API (6.x - app-api.pixiv.net)
 type AppPixivAPI struct {
-	sling   *sling.Sling
-	timeout time.Duration
-	proxy   *url.URL
+	sling *sling.Sling
+
+	downloadClient *http.Client
+
+	tmpDir string
 }
 
 func NewApp() *AppPixivAPI {
 	s := sling.New().Base(apiBase).Set("User-Agent", "PixivIOSApp/7.6.2 (iOS 12.2; iPhone9,1)").Set("App-Version", "7.6.2").Set("App-OS-VERSION", "12.2").Set("App-OS", "ios")
-	return &AppPixivAPI{sling: s}
+	return &AppPixivAPI{
+		sling:          s,
+		downloadClient: http.DefaultClient,
+	}
 }
 
 func (a *AppPixivAPI) request(path string, params, data interface{}, auth bool) (err error) {
@@ -39,13 +42,22 @@ func (a *AppPixivAPI) request(path string, params, data interface{}, auth bool) 
 	return err
 }
 
-func (a *AppPixivAPI) WithDownloadTimeout(timeout time.Duration) *AppPixivAPI {
-	a.timeout = timeout
+func (a *AppPixivAPI) WithClient(client *http.Client) *AppPixivAPI {
+	if client != nil {
+		a.sling = a.sling.Client(client)
+	}
 	return a
 }
 
-func (a *AppPixivAPI) WithDownloadProxy(proxy *url.URL) *AppPixivAPI {
-	a.proxy = proxy
+func (a *AppPixivAPI) WithDownloadClient(client *http.Client) *AppPixivAPI {
+	if client != nil {
+		a.downloadClient = client
+	}
+	return a
+}
+
+func (a *AppPixivAPI) WithTmpdir(dir string) *AppPixivAPI {
+	a.tmpDir = dir
 	return a
 }
 
@@ -169,7 +181,9 @@ func (a *AppPixivAPI) IllustDetail(id uint64) (*Illust, error) {
 }
 
 // Download a specific picture from pixiv id
-func (a *AppPixivAPI) Download(id uint64, path string) (sizes []int64, err error) {
+// @target: string, download path
+// @target: func(*Illust) string, download path generator
+func (a *AppPixivAPI) Download(id uint64, target any) (sizes []int64, err error) {
 	illust, err := a.IllustDetail(id)
 	if err != nil {
 		err = errors.Wrapf(err, "illust %d detail error", id)
@@ -193,25 +207,25 @@ func (a *AppPixivAPI) Download(id uint64, path string) (sizes []int64, err error
 		urls = append(urls, illust.MetaSinglePage.OriginalImageURL)
 	}
 
-	dclient := &http.Client{}
-	if a.proxy != nil {
-		dclient.Transport = &http.Transport{
-			Proxy: http.ProxyURL(a.proxy),
-		}
-	}
-	if a.timeout != 0 {
-		dclient.Timeout = a.timeout
+	var path string
+	switch t := target.(type) {
+	case string:
+		path = t
+	case func(*Illust) string:
+		path = t(illust)
+	default:
+		err = errors.New("target must be string or func(*Illust) string")
+		return
 	}
 
 	for _, u := range urls {
-		size, e := download(dclient, u, path, filepath.Base(u), false)
+		size, e := download(a.downloadClient, u, path, filepath.Base(u), a.tmpDir, false)
 		if e != nil {
 			err = errors.Wrapf(e, "download url %s failed", u)
 			return
 		}
 		sizes = append(sizes, size)
 	}
-
 	return
 }
 
